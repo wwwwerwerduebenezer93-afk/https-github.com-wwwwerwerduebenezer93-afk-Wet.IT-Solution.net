@@ -1,0 +1,14 @@
+<?php
+function e(string $v):string{return htmlspecialchars($v,ENT_QUOTES,'UTF-8');}
+function url(string $path=''):string{global $config;return rtrim($config['app_url'],'/').'/'.ltrim($path,'/');}
+function go(string $path):never{header('Location: '.url($path));exit;}
+function csrf():string{if(empty($_SESSION['csrf']))$_SESSION['csrf']=bin2hex(random_bytes(32));return $_SESSION['csrf'];}
+function check_csrf():void{if(!hash_equals($_SESSION['csrf']??'',$_POST['csrf']??'')){http_response_code(419);exit('Invalid request token.');}}
+function note(string $m):void{$_SESSION['note']=$m;} function take_note():string{$m=$_SESSION['note']??'';unset($_SESSION['note']);return $m;}
+function me():?array{global $pdo;if(empty($_SESSION['uid']))return null;$s=$pdo->prepare('SELECT * FROM users WHERE id=?');$s->execute([$_SESSION['uid']]);return $s->fetch()?:null;}
+function login_required():array{$u=me();if(!$u)go('login.php');return $u;} function admin_required():array{$u=login_required();if($u['role']!=='admin'){http_response_code(403);exit('Forbidden');}return $u;}
+function audit(string $event,?int $uid=null,string $details=''):void{global $pdo,$config;$ip=hash_hmac('sha256',$_SERVER['REMOTE_ADDR']??'unknown',$config['app_secret']);$s=$pdo->prepare('INSERT INTO audit_logs(user_id,event,ip_hash,details) VALUES(?,?,?,?)');$s->execute([$uid,$event,$ip,substr($details,0,255)]);}
+function valid_password(string $p):bool{return strlen($p)>=12&&preg_match('/[A-Z]/',$p)&&preg_match('/[a-z]/',$p)&&preg_match('/\d/',$p)&&preg_match('/[^A-Za-z0-9]/',$p);}
+function send_mail_safe(string $to,string $subject,string $body):bool{global $config;$h='From: '.$config['mail_from']."\r\nContent-Type: text/plain; charset=UTF-8";return @mail($to,$subject,$body,$h);}
+function save_photo(string $data,int $uid):?string{if(!preg_match('#^data:image/(jpeg|png);base64,(.+)$#',$data,$m))return null;$raw=base64_decode($m[2],true);if($raw===false||strlen($raw)>3_000_000||!getimagesizefromstring($raw))return null;$img=@imagecreatefromstring($raw);if(!$img)return null;$dir=dirname(__DIR__).'/uploads/private';if(!is_dir($dir))mkdir($dir,0700,true);$name=$uid.'_'.bin2hex(random_bytes(8)).'.jpg';imagejpeg($img,$dir.'/'.$name,82);imagedestroy($img);return 'uploads/private/'.$name;}
+function risk(float $amount):array{global $pdo;$score=0;$why=[];$hour=(int)date('G');if($amount>=5000){$score+=45;$why[]='High amount';}elseif($amount>=1000){$score+=25;$why[]='Elevated amount';}if($hour<6||$hour>22){$score+=20;$why[]='Unusual hour';}$s=$pdo->prepare('SELECT COUNT(*) FROM transactions WHERE user_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 10 MINUTE)');$s->execute([$_SESSION['uid']]);if((int)$s->fetchColumn()>=3){$score+=35;$why[]='High transaction velocity';}$score=min(100,$score);$level=$score>=60?'high':($score>=30?'medium':'low');return [$score,$level,$why?:['No strong anomaly detected']];}
